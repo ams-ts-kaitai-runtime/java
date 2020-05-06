@@ -1,5 +1,5 @@
 /**
- * Copyright 2015-2016 Kaitai Project: MIT license
+ * Copyright 2015-2019 Kaitai Project: MIT license
  *
  * Permission is hereby granted, free of charge, to any person obtaining
  * a copy of this software and associated documentation files (the
@@ -189,7 +189,7 @@ public abstract class KaitaiStream implements Closeable {
         bitsLeft = 0;
     }
 
-    public long readBitsInt(int n) {
+    public long readBitsIntBe(int n) {
         int bitsNeeded = n - bitsLeft;
         if (bitsNeeded > 0) {
             // 1 bit  => 1 byte
@@ -207,15 +207,48 @@ public abstract class KaitaiStream implements Closeable {
 
         // raw mask with required number of 1s, starting from lowest bit
         long mask = getMaskOnes(n);
-        // shift mask to align with highest bits available in "bits"
+        // shift "bits" to align the highest bits with the mask & derive the result
         int shiftBits = bitsLeft - n;
-        mask <<= shiftBits;
-        // derive reading result
-        long res = (bits & mask) >>> shiftBits;
+        long res = (bits >>> shiftBits) & mask;
         // clear top bits that we've just read => AND with 1s
         bitsLeft -= n;
         mask = getMaskOnes(bitsLeft);
         bits &= mask;
+
+        return res;
+    }
+
+    /**
+     * Unused since Kaitai Struct Compiler v0.9+ - compatibility with older versions
+     *
+     * @deprecated use {@link #readBitsIntBe()} instead
+     */
+    @Deprecated
+    public long readBitsInt(int n) {
+        return readBitsIntBe(n);
+    }
+
+    public long readBitsIntLe(int n) {
+        int bitsNeeded = n - bitsLeft;
+        if (bitsNeeded > 0) {
+            // 1 bit  => 1 byte
+            // 8 bits => 1 byte
+            // 9 bits => 2 bytes
+            int bytesNeeded = ((bitsNeeded - 1) / 8) + 1;
+            byte[] buf = readBytes(bytesNeeded);
+            for (byte b : buf) {
+                bits |= ((long) (b & 0xff) << bitsLeft);
+                bitsLeft += 8;
+            }
+        }
+
+        // raw mask with required number of 1s, starting from lowest bit
+        long mask = getMaskOnes(n);
+        // derive reading result
+        long res = bits & mask;
+        // remove bottom bits that we've just read by shifting
+        bits >>= n;
+        bitsLeft -= n;
 
         return res;
     }
@@ -457,6 +490,38 @@ public abstract class KaitaiStream implements Closeable {
         }
     }
 
+    /**
+     * Finds the minimal byte in a byte array, treating bytes as
+     * unsigned values.
+     * @param b byte array to scan
+     * @return minimal byte in byte array as integer
+     */
+    public static int byteArrayMin(byte[] b) {
+        int min = Integer.MAX_VALUE;
+        for (int i = 0; i < b.length; i++) {
+            int value = b[i] & 0xff;
+            if (value < min)
+                min = value;
+        }
+        return min;
+    }
+
+    /**
+     * Finds the maximal byte in a byte array, treating bytes as
+     * unsigned values.
+     * @param b byte array to scan
+     * @return maximal byte in byte array as integer
+     */
+    public static int byteArrayMax(byte[] b) {
+        int max = 0;
+        for (int i = 0; i < b.length; i++) {
+            int value = b[i] & 0xff;
+            if (value > max)
+                max = value;
+        }
+        return max;
+    }
+
     //endregion
 
     /**
@@ -488,4 +553,85 @@ public abstract class KaitaiStream implements Closeable {
      * implies that there should be some positive result).
      */
     public static class UndecidedEndiannessError extends RuntimeException {}
+
+    /**
+     * Common ancestor for all error originating from Kaitai Struct usage.
+     * Stores KSY source path, pointing to an element supposedly guilty of
+     * an error.
+     */
+    public static class KaitaiStructError extends RuntimeException {
+        public KaitaiStructError(String msg, String srcPath) {
+            super(srcPath + ": " + msg);
+            this.srcPath = srcPath;
+        }
+
+        protected String srcPath;
+    }
+
+    /**
+     * Common ancestor for all validation failures. Stores pointer to
+     * KaitaiStream IO object which was involved in an error.
+     */
+    public static class ValidationFailedError extends KaitaiStructError {
+        public ValidationFailedError(String msg, KaitaiStream io, String srcPath) {
+            super("at pos " + io.pos() + ": validation failed: " + msg, srcPath);
+            this.io = io;
+        }
+
+        protected KaitaiStream io;
+
+        protected static String byteArrayToHex(byte[] arr) {
+            StringBuilder sb = new StringBuilder("[");
+            for (int i = 0; i < arr.length; i++) {
+                if (i > 0)
+                    sb.append(' ');
+                sb.append(String.format("%02x", arr[i]));
+            }
+            sb.append(']');
+            return sb.toString();
+        }
+    }
+
+    /**
+     * Signals validation failure: we required "actual" value to be equal to
+     * "expected", but it turned out that it's not.
+     */
+    public static class ValidationNotEqualError extends ValidationFailedError {
+        public ValidationNotEqualError(byte[] expected, byte[] actual, KaitaiStream io, String srcPath) {
+            super("not equal, expected " + byteArrayToHex(expected) + ", but got " + byteArrayToHex(actual), io, srcPath);
+        }
+
+        public ValidationNotEqualError(Object expected, Object actual, KaitaiStream io, String srcPath) {
+            super("not equal, expected " + expected + ", but got " + actual, io, srcPath);
+        }
+
+        protected Object expected;
+        protected Object actual;
+    }
+
+    public static class ValidationLessThanError extends ValidationFailedError {
+        public ValidationLessThanError(long min, long actual, KaitaiStream io, String srcPath) {
+            super("not in range, min " + min + ", but got " + actual, io, srcPath);
+        }
+
+        protected long min;
+        protected long actual;
+    }
+
+    public static class ValidationGreaterThanError extends ValidationFailedError {
+        public ValidationGreaterThanError(long max, long actual, KaitaiStream io, String srcPath) {
+            super("not in range, max " + max + ", but got " + actual, io, srcPath);
+        }
+
+        protected long max;
+        protected long actual;
+    }
+
+    public static class ValidationNotAnyOfError extends ValidationFailedError {
+        public ValidationNotAnyOfError(Object actual, KaitaiStream io, String srcPath) {
+            super("not any of the list, got " + actual, io, srcPath);
+        }
+
+        protected Object actual;
+    }
 }
