@@ -288,7 +288,9 @@ public abstract class KaitaiStream implements Closeable {
      * @param expected contents to be expected
      * @return read bytes as byte array, which are guaranteed to equal to expected
      * @throws UnexpectedDataError if read data from stream isn't equal to given data
+     * @deprecated Not used anymore in favour of validators.
      */
+    @Deprecated
     public byte[] ensureFixedContents(byte[] expected) {
         byte[] actual = readBytes(expected.length);
         if (!Arrays.equals(actual, expected))
@@ -306,7 +308,7 @@ public abstract class KaitaiStream implements Closeable {
     public static byte[] bytesTerminate(byte[] bytes, byte term, boolean includeTerm) {
         int newLen = 0;
         int maxLen = bytes.length;
-        while (bytes[newLen] != term && newLen < maxLen)
+        while (newLen < maxLen && bytes[newLen] != term)
             newLen++;
         if (includeTerm && newLen < maxLen)
             newLen++;
@@ -527,7 +529,10 @@ public abstract class KaitaiStream implements Closeable {
     /**
      * Exception class for an error that occurs when some fixed content
      * was expected to appear, but actual data read was different.
+     *
+     * @deprecated Not used anymore in favour of {@code Validation*}-exceptions.
      */
+    @Deprecated
     public static class UnexpectedDataError extends RuntimeException {
         public UnexpectedDataError(byte[] actual, byte[] expected) {
             super(
@@ -610,27 +615,43 @@ public abstract class KaitaiStream implements Closeable {
     }
 
     public static class ValidationLessThanError extends ValidationFailedError {
-        public ValidationLessThanError(long min, long actual, KaitaiStream io, String srcPath) {
+        public ValidationLessThanError(byte[] expected, byte[] actual, KaitaiStream io, String srcPath) {
+            super("not in range, min " + byteArrayToHex(expected) + ", but got " + byteArrayToHex(actual), io, srcPath);
+        }
+
+        public ValidationLessThanError(Object min, Object actual, KaitaiStream io, String srcPath) {
             super("not in range, min " + min + ", but got " + actual, io, srcPath);
         }
 
-        protected long min;
-        protected long actual;
+        protected Object min;
+        protected Object actual;
     }
 
     public static class ValidationGreaterThanError extends ValidationFailedError {
-        public ValidationGreaterThanError(long max, long actual, KaitaiStream io, String srcPath) {
+        public ValidationGreaterThanError(byte[] expected, byte[] actual, KaitaiStream io, String srcPath) {
+            super("not in range, max " + byteArrayToHex(expected) + ", but got " + byteArrayToHex(actual), io, srcPath);
+        }
+
+        public ValidationGreaterThanError(Object max, Object actual, KaitaiStream io, String srcPath) {
             super("not in range, max " + max + ", but got " + actual, io, srcPath);
         }
 
-        protected long max;
-        protected long actual;
+        protected Object max;
+        protected Object actual;
     }
 
     public static class ValidationNotAnyOfError extends ValidationFailedError {
         public ValidationNotAnyOfError(Object actual, KaitaiStream io, String srcPath) {
             super("not any of the list, got " + actual, io, srcPath);
         }
+
+        protected Object actual;
+    }
+
+    public static class ValidationExprError extends ValidationFailedError {
+        public ValidationExprError(Object actual, KaitaiStream io, String srcPath) {
+            super("not matching the expression, got " + actual, io, srcPath);
+}
 
         protected Object actual;
     }
